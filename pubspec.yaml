@@ -1,0 +1,31 @@
+name: inventory_bkm_mobile
+description: Mobile app for Inventory BKM Grocery division.
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.3.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  floating_bottom_bar: ^0.0.4
+  animated_notch_bottom_bar: ^1.0.4
+  http: ^0.13.6
+  image_picker: ^0.8.7+5
+  shared_preferences: ^2.1.5
+  device_info_plus: ^10.1.2
+  local_auth: ^2.2.0
+  image: ^4.0.19
+  google_mlkit_text_recognition: ^0.14.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/logos/logo_papaya.png
+    - assets/logos/label_babi.png
