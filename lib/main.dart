@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/painting.dart';
 import 'package:inventory_bkm_mobile/screens/splash_screen.dart';
+import 'package:inventory_bkm_mobile/services/auth_service.dart';
 
-void main() {
+Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  await AuthService.initialize();
   PaintingBinding.instance.imageCache.maximumSize = 120;
   PaintingBinding.instance.imageCache.maximumSizeBytes = 80 << 20;
   runApp(const InventoryBkmMobileApp());
@@ -30,7 +32,8 @@ class InventoryBkmMobileApp extends StatelessWidget {
         scaffoldBackgroundColor: const Color(0xFFFFF8DE),
         cardTheme: CardThemeData(
           color: Colors.white,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(26)),
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(26)),
           elevation: 0,
           shadowColor: const Color(0xFF7CA7B0).withOpacity(0.18),
         ),

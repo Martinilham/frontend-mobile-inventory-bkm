@@ -53,10 +53,11 @@ class MenuScreen extends StatelessWidget {
                       const SizedBox(height: 8),
                       Text(
                         'Pilih modul kerja harian',
-                        style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                              color: const Color(0xFF1D2B38),
-                              fontWeight: FontWeight.w800,
-                            ),
+                        style:
+                            Theme.of(context).textTheme.headlineSmall?.copyWith(
+                                  color: const Color(0xFF1D2B38),
+                                  fontWeight: FontWeight.w800,
+                                ),
                       ),
                     ],
                   ),
@@ -106,8 +107,8 @@ class MenuScreen extends StatelessWidget {
           const SizedBox(height: 14),
           _MenuTile(
             icon: Icons.photo_camera_back_outlined,
-            title: 'Foto Data Form',
-            subtitle: 'Dokumentasi form dengan nama, foto, dan tanggal',
+            title: 'Form Update Data Customer',
+            subtitle: 'OCR form customer dan simpan data berdasarkan tanggal',
             accent: const Color(0xFF6FAF3F),
             onTap: () {
               Navigator.of(context).push(

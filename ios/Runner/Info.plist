@@ -53,6 +53,13 @@
 	<string>LaunchScreen</string>
 	<key>NSCameraUsageDescription</key>
 	<string>Aplikasi memerlukan akses kamera untuk mengambil foto produk.</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Aplikasi menggunakan jaringan lokal untuk terhubung ke server Inventory BKM di komputer.</string>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsArbitraryLoadsInLocalNetworking</key>
+		<true/>
+	</dict>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>Aplikasi memerlukan akses galeri untuk memilih foto produk.</string>
 	<key>UIMainStoryboardFile</key>

@@ -13,6 +13,8 @@ class AccountSettingsScreen extends StatefulWidget {
 }
 
 class _AccountSettingsScreenState extends State<AccountSettingsScreen> {
+  final _backendUrlController =
+      TextEditingController(text: AuthService.backendUrl);
   String? _username;
   String? _role;
   Map<String, dynamic>? _currentUser;
@@ -21,6 +23,12 @@ class _AccountSettingsScreenState extends State<AccountSettingsScreen> {
   bool _isLoadingUsers = true;
   String? _usersMessage;
   List<Map<String, dynamic>> _users = [];
+
+  @override
+  void dispose() {
+    _backendUrlController.dispose();
+    super.dispose();
+  }
 
   @override
   void initState() {
@@ -92,8 +100,8 @@ class _AccountSettingsScreenState extends State<AccountSettingsScreen> {
       final body = jsonDecode(response.body);
 
       if (response.statusCode == 403) {
-        setState(() => _usersMessage =
-            'Daftar akun hanya dapat dilihat oleh role EDP.');
+        setState(() =>
+            _usersMessage = 'Daftar akun hanya dapat dilihat oleh role EDP.');
         return;
       }
       if (response.statusCode >= 400) {
@@ -123,6 +131,28 @@ class _AccountSettingsScreenState extends State<AccountSettingsScreen> {
     );
   }
 
+  Future<void> _saveBackendUrl() async {
+    try {
+      await AuthService.setBackendUrl(_backendUrlController.text);
+      await AuthService.clearLocalSession();
+      if (!mounted) return;
+      Navigator.of(context).pushAndRemoveUntil(
+        MaterialPageRoute(builder: (_) => const LoginScreen()),
+        (_) => false,
+      );
+    } on FormatException catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(error.message)),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Gagal menyimpan alamat server: $error')),
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Container(
@@ -141,60 +171,128 @@ class _AccountSettingsScreenState extends State<AccountSettingsScreen> {
         child: ListView(
           padding: const EdgeInsets.fromLTRB(20, 20, 20, 92),
           children: [
-          Card(
-            child: Padding(
-              padding: const EdgeInsets.all(20),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    'Akun Setting',
-                    style: Theme.of(context)
-                        .textTheme
-                        .titleLarge
-                        ?.copyWith(fontWeight: FontWeight.bold),
-                  ),
-                  const SizedBox(height: 16),
-                  _InfoRow(label: 'Username', value: _username ?? '-'),
-                  const SizedBox(height: 8),
-                  _InfoRow(label: 'Role', value: (_role ?? '-').toUpperCase()),
-                  const SizedBox(height: 8),
-                  _InfoRow(
-                      label: 'Nomor HP',
-                      value: _currentUser?['phoneNumber']?.toString() ?? '-'),
-                  const SizedBox(height: 8),
-                  _InfoRow(
-                      label: 'Status',
-                      value: _currentUser?['active'] == false
-                          ? 'Nonaktif'
-                          : 'Aktif'),
-                  const SizedBox(height: 16),
-                  SwitchListTile(
-                    contentPadding: EdgeInsets.zero,
-                    title: const Text('Login dengan sidik jari'),
-                    subtitle: Text(_biometricAvailable
-                        ? 'Aktifkan untuk login cepat di perangkat ini'
-                        : 'Sidik jari tidak tersedia di perangkat ini'),
-                    value: _biometricEnabled && _biometricAvailable,
-                    onChanged: _biometricAvailable ? _setBiometric : null,
-                    secondary: const Icon(Icons.fingerprint),
-                  ),
-                ],
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.all(20),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Akun Setting',
+                      style: Theme.of(context)
+                          .textTheme
+                          .titleLarge
+                          ?.copyWith(fontWeight: FontWeight.bold),
+                    ),
+                    const SizedBox(height: 16),
+                    _InfoRow(label: 'Username', value: _username ?? '-'),
+                    const SizedBox(height: 8),
+                    _InfoRow(
+                        label: 'Role', value: (_role ?? '-').toUpperCase()),
+                    const SizedBox(height: 8),
+                    _InfoRow(
+                        label: 'Nomor HP',
+                        value: _currentUser?['phoneNumber']?.toString() ?? '-'),
+                    const SizedBox(height: 8),
+                    _InfoRow(
+                        label: 'Status',
+                        value: _currentUser?['active'] == false
+                            ? 'Nonaktif'
+                            : 'Aktif'),
+                    const SizedBox(height: 16),
+                    SwitchListTile(
+                      contentPadding: EdgeInsets.zero,
+                      title: const Text('Login dengan sidik jari'),
+                      subtitle: Text(_biometricAvailable
+                          ? 'Aktifkan untuk login cepat di perangkat ini'
+                          : 'Sidik jari tidak tersedia di perangkat ini'),
+                      value: _biometricEnabled && _biometricAvailable,
+                      onChanged: _biometricAvailable ? _setBiometric : null,
+                      secondary: const Icon(Icons.fingerprint),
+                    ),
+                  ],
+                ),
               ),
             ),
-          ),
-          const SizedBox(height: 16),
-          _buildUsersCard(),
-          const SizedBox(height: 16),
-          FilledButton.icon(
-            onPressed: _logout,
-            icon: const Icon(Icons.logout),
-            label: const Text('Keluar'),
-            style: FilledButton.styleFrom(
-              backgroundColor: const Color(0xFFE53935),
-              padding: const EdgeInsets.symmetric(vertical: 14),
+            const SizedBox(height: 16),
+            _buildServerSettingsCard(),
+            const SizedBox(height: 16),
+            _buildUsersCard(),
+            const SizedBox(height: 16),
+            FilledButton.icon(
+              onPressed: _logout,
+              icon: const Icon(Icons.logout),
+              label: const Text('Keluar'),
+              style: FilledButton.styleFrom(
+                backgroundColor: const Color(0xFFE53935),
+                padding: const EdgeInsets.symmetric(vertical: 14),
+              ),
             ),
-          ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildServerSettingsCard() {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Koneksi Server',
+              style: TextStyle(fontWeight: FontWeight.w900, fontSize: 17),
+            ),
+            const SizedBox(height: 8),
+            const Text(
+              'Gunakan Dev Tunnel VS Code atau alamat backend lokal.',
+              style: TextStyle(color: Color(0xFF6D7F87)),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _backendUrlController,
+              keyboardType: TextInputType.url,
+              autocorrect: false,
+              decoration: const InputDecoration(
+                labelText: 'URL server',
+                hintText: 'https://...devtunnels.ms',
+                prefixIcon: Icon(Icons.link),
+              ),
+            ),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 8,
+              runSpacing: 4,
+              children: [
+                TextButton(
+                  onPressed: () => _backendUrlController.text =
+                      AuthService.defaultBackendUrl,
+                  child: const Text('Gunakan Dev Tunnel'),
+                ),
+                TextButton(
+                  onPressed: () =>
+                      _backendUrlController.text = 'http://10.0.2.2:3000',
+                  child: const Text('Lokal (Android Emulator)'),
+                ),
+              ],
+            ),
+            const Text(
+              'Ponsel fisik: isi http://IP-KOMPUTER:3000 dan pastikan ponsel '
+              'serta komputer berada di Wi-Fi yang sama. Dev Tunnel: '
+              'https://rkcbt3vw-3000.asse.devtunnels.ms',
+              style: TextStyle(color: Color(0xFF6D7F87), fontSize: 12),
+            ),
+            const SizedBox(height: 12),
+            SizedBox(
+              width: double.infinity,
+              child: FilledButton.icon(
+                onPressed: _saveBackendUrl,
+                icon: const Icon(Icons.save_outlined),
+                label: const Text('Simpan & Masuk Ulang'),
+              ),
+            ),
           ],
         ),
       ),
@@ -396,8 +494,8 @@ class _InfoRow extends StatelessWidget {
             width: 90,
             child: Text(label, style: const TextStyle(color: Colors.black54))),
         Expanded(
-            child:
-                Text(value, style: const TextStyle(fontWeight: FontWeight.w600))),
+            child: Text(value,
+                style: const TextStyle(fontWeight: FontWeight.w600))),
       ],
     );
   }

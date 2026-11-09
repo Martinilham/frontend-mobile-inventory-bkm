@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:cunning_document_scanner/cunning_document_scanner.dart';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:image_picker/image_picker.dart';
@@ -30,7 +31,13 @@ class _DokumentasiPembuanganScreenState
   final _journalController = TextEditingController();
   String _selectedDivision = 'GROCERY';
   DateTime _selectedDate = DateTime.now();
+  DateTime? _filterDate;
+  static const _pageSize = 10;
+  int _currentPage = 1;
+  int _totalPages = 1;
+  int _totalItems = 0;
   List<File> _photos = [];
+  List<File> _scanPdfs = [];
   bool _isLoading = true;
   bool _isUploading = false;
   String? _message;
@@ -49,10 +56,14 @@ class _DokumentasiPembuanganScreenState
   }
 
   Future<void> _loadItems() async {
-    final cached = await AuthService.getJsonCache('mobile_disposals');
+    final dateKey = _filterDate?.toIso8601String().split('T').first ?? 'all';
+    final cacheKey = 'mobile_disposals_${dateKey}_$_currentPage';
+    final cached = await AuthService.getJsonCache(cacheKey);
     if (cached != null && mounted) {
       setState(() {
         _items = List<Map<String, dynamic>>.from(cached['disposals'] ?? []);
+        _totalPages = cached['totalPages'] as int? ?? 1;
+        _totalItems = cached['total'] as int? ?? _items.length;
         _isLoading = false;
       });
     }
@@ -71,8 +82,15 @@ class _DokumentasiPembuanganScreenState
         return;
       }
 
+      final query = <String, String>{
+        'page': '$_currentPage',
+        'limit': '$_pageSize',
+        if (_filterDate != null)
+          'date': _filterDate!.toIso8601String().split('T').first,
+      };
       final response = await http.get(
-        Uri.parse('${AuthService.backendUrl}/api/disposals'),
+        Uri.parse('${AuthService.backendUrl}/api/disposals')
+            .replace(queryParameters: query),
         headers: await AuthService.authHeaders(token),
       );
       final body = jsonDecode(response.body);
@@ -86,8 +104,11 @@ class _DokumentasiPembuanganScreenState
 
       setState(() {
         _items = List<Map<String, dynamic>>.from(body['disposals'] ?? []);
+        final pagination = body['pagination'] as Map<String, dynamic>? ?? {};
+        _totalPages = pagination['totalPages'] as int? ?? 1;
+        _totalItems = pagination['total'] as int? ?? _items.length;
       });
-      await _saveItemsCache();
+      await _saveItemsCache(cacheKey);
     } catch (error) {
       setState(() => _message = 'Gagal memuat data: $error');
     } finally {
@@ -107,42 +128,89 @@ class _DokumentasiPembuanganScreenState
     }
   }
 
-  Future<void> _pickFromGallery() async {
+  Future<void> _pickFilterDate() async {
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: _filterDate ?? DateTime.now(),
+      firstDate: DateTime(2023),
+      lastDate: DateTime(2035),
+    );
+    if (picked == null) return;
+    setState(() {
+      _filterDate = picked;
+      _currentPage = 1;
+      _items = [];
+      _isLoading = true;
+    });
+    await _loadItems();
+  }
+
+  Future<void> _clearFilterDate() async {
+    setState(() {
+      _filterDate = null;
+      _currentPage = 1;
+      _items = [];
+      _isLoading = true;
+    });
+    await _loadItems();
+  }
+
+  Future<void> _changePage(int page) async {
+    if (page < 1 || page > _totalPages || page == _currentPage) return;
+    setState(() {
+      _currentPage = page;
+      _items = [];
+      _isLoading = true;
+    });
+    await _loadItems();
+  }
+
+  Future<void> _scanDocument() async {
     try {
-      final photos = await _imagePicker.pickMultiImage(
-        maxWidth: 1600,
-        imageQuality: 82,
+      final paths = await CunningDocumentScanner.getPictures(
+        scannerSource: ScannerSource.cameraAndGallery,
+        noOfPages: 25,
+        asPdf: true,
       );
-      if (photos.isEmpty) return;
+      if (paths == null || paths.isEmpty) return;
       setState(() {
-        _photos = [..._photos, ...photos.map((photo) => File(photo.path))];
+        _scanPdfs = [..._scanPdfs, ...paths.map((path) => File(path))];
         _message = null;
       });
     } catch (error) {
-      setState(() => _message = 'Gagal memilih foto: $error');
+      if (mounted) setState(() => _message = 'Pemindaian gagal: $error');
     }
   }
 
-  Future<void> _pickFromCamera() async {
+  Future<void> _pickPhotos({required bool fromCamera}) async {
     try {
-      final photo = await _imagePicker.pickImage(
-        source: ImageSource.camera,
-        maxWidth: 1600,
-        imageQuality: 82,
-      );
-      if (photo == null) return;
+      late final List<File> files;
+      if (fromCamera) {
+        final picked = await _imagePicker.pickImage(
+              source: ImageSource.camera,
+              maxWidth: 1800,
+              imageQuality: 88,
+            );
+        if (picked == null) return;
+        files = [File(picked.path)];
+      } else {
+        final picked = await _imagePicker.pickMultiImage(
+            maxWidth: 1800, imageQuality: 88);
+        if (picked.isEmpty) return;
+        files = picked.map((photo) => File(photo.path)).toList();
+      }
       setState(() {
-        _photos = [..._photos, File(photo.path)];
+        _photos = [..._photos, ...files];
         _message = null;
       });
     } catch (error) {
-      setState(() => _message = 'Gagal mengambil foto: $error');
+      if (mounted) setState(() => _message = 'Gagal memilih foto: $error');
     }
   }
 
   Future<void> _uploadDisposal() async {
     if (_photos.isEmpty) {
-      setState(() => _message = 'Minimal pilih satu foto dokumentasi');
+      setState(() => _message = 'Ambil atau pilih minimal satu foto pembuangan');
       return;
     }
 
@@ -166,10 +234,19 @@ class _DokumentasiPembuanganScreenState
       request.fields['division'] = _selectedDivision;
       request.fields['date'] = _selectedDate.toIso8601String().split('T').first;
       request.fields['journal'] = _journalController.text.trim();
-
       for (final photo in _photos) {
         request.files.add(
           await http.MultipartFile.fromPath('photos', photo.path),
+        );
+      }
+      for (final pdf in _scanPdfs) {
+        request.files.add(
+          await http.MultipartFile.fromPath(
+            'scannedPdfs',
+            pdf.path,
+            filename:
+                'scan_pembuangan_${DateTime.now().millisecondsSinceEpoch}.pdf',
+          ),
         );
       }
 
@@ -187,19 +264,26 @@ class _DokumentasiPembuanganScreenState
         return;
       }
 
-      const successMessage = 'Dokumentasi pembuangan berhasil diunggah';
+      final successMessage = _scanPdfs.isEmpty
+          ? 'Foto pembuangan berhasil disimpan'
+          : 'Foto dan PDF hasil scan pembuangan berhasil disimpan';
       final uploaded = body['disposal'];
       setState(() {
         if (uploaded is Map<String, dynamic>) {
           _items = [uploaded, ..._items];
         }
+        _filterDate = null;
+        _currentPage = 1;
+        _isLoading = true;
         _message = successMessage;
+        _scanPdfs = [];
         _photos = [];
         _journalController.clear();
         _selectedDivision = 'GROCERY';
         _selectedDate = DateTime.now();
       });
       await _saveItemsCache();
+      await CunningDocumentScanner.cleanCache();
       if (mounted) {
         await showAppPopup(context,
             title: 'Berhasil', message: successMessage, success: true);
@@ -217,15 +301,18 @@ class _DokumentasiPembuanganScreenState
     }
   }
 
-  void _removePhoto(int index) {
+  void _removeScanPdf(int index) {
     setState(() {
-      _photos = List<File>.from(_photos)..removeAt(index);
+      _scanPdfs = List<File>.from(_scanPdfs)..removeAt(index);
     });
   }
 
-  Future<void> _saveItemsCache() async {
-    await AuthService.saveJsonCache('mobile_disposals', {
+  Future<void> _saveItemsCache([String? cacheKey]) async {
+    final dateKey = _filterDate?.toIso8601String().split('T').first ?? 'all';
+    await AuthService.saveJsonCache(cacheKey ?? 'mobile_disposals_${dateKey}_$_currentPage', {
       'disposals': _items,
+      'totalPages': _totalPages,
+      'total': _totalItems,
     });
   }
 
@@ -247,7 +334,9 @@ class _DokumentasiPembuanganScreenState
           title: const Text('Dokumentasi Pembuangan'),
           bottom: const TabBar(
             tabs: [
-              Tab(icon: Icon(Icons.add_photo_alternate_outlined), text: 'Input Foto'),
+              Tab(
+                  icon: Icon(Icons.document_scanner_outlined),
+                  text: 'Scan Form'),
               Tab(icon: Icon(Icons.fact_check_outlined), text: 'Data Scan'),
             ],
           ),
@@ -296,6 +385,7 @@ class _DokumentasiPembuanganScreenState
                       const SizedBox(height: 10),
                       _buildMessage(_message!),
                     ],
+                    _buildDateFilter(),
                     const SizedBox(height: 10),
                     _buildList(),
                   ],
@@ -367,22 +457,43 @@ class _DokumentasiPembuanganScreenState
           ),
           const SizedBox(height: 12),
           _buildPhotoPicker(),
-          const SizedBox(height: 12),
+          const SizedBox(height: 8),
           Row(
             children: [
               Expanded(
                 child: OutlinedButton.icon(
-                  onPressed: _pickFromGallery,
-                  icon: const Icon(Icons.photo_library_outlined, size: 18),
-                  label: const Text('Galeri'),
+                  onPressed: () => _pickPhotos(fromCamera: true),
+                  icon: const Icon(Icons.camera_alt_outlined, size: 18),
+                  label: const Text('Foto Kamera'),
                 ),
               ),
               const SizedBox(width: 8),
               Expanded(
                 child: OutlinedButton.icon(
-                  onPressed: _pickFromCamera,
-                  icon: const Icon(Icons.camera_alt_outlined, size: 18),
-                  label: const Text('Kamera'),
+                  onPressed: () => _pickPhotos(fromCamera: false),
+                  icon: const Icon(Icons.photo_library_outlined, size: 18),
+                  label: const Text('Dari Galeri'),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          _buildScanPicker(),
+          if (_scanPdfs.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            Text(
+              '${_scanPdfs.length} PDF hasil scan opsional siap disimpan.',
+              style: TextStyle(color: Colors.grey.shade700, fontSize: 12),
+            ),
+          ],
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: _scanDocument,
+                  icon: const Icon(Icons.document_scanner_outlined, size: 18),
+                  label: const Text('Tambah PDF (Opsional)'),
                 ),
               ),
             ],
@@ -391,7 +502,9 @@ class _DokumentasiPembuanganScreenState
           ElevatedButton.icon(
             onPressed: _isUploading ? null : _uploadDisposal,
             icon: const Icon(Icons.cloud_upload_outlined, size: 18),
-            label: Text(_isUploading ? 'Mengunggah...' : 'Simpan Pembuangan'),
+            label: Text(_isUploading
+                ? 'Menyimpan data...'
+                : 'Simpan Pembuangan'),
           ),
         ],
       ),
@@ -410,8 +523,8 @@ class _DokumentasiPembuanganScreenState
     );
   }
 
-  Widget _buildPhotoPicker() {
-    if (_photos.isEmpty) {
+  Widget _buildScanPicker() {
+    if (_scanPdfs.isEmpty) {
       return AspectRatio(
         aspectRatio: 16 / 9,
         child: Container(
@@ -424,7 +537,7 @@ class _DokumentasiPembuanganScreenState
             borderRadius: BorderRadius.circular(24),
           ),
           child: Center(
-            child: Icon(Icons.image_outlined,
+            child: Icon(Icons.document_scanner_outlined,
                 size: 42, color: Color(0xFF8AA05A)),
           ),
         ),
@@ -435,21 +548,23 @@ class _DokumentasiPembuanganScreenState
       height: 112,
       child: ListView.separated(
         scrollDirection: Axis.horizontal,
-        itemCount: _photos.length,
+        itemCount: _scanPdfs.length,
         separatorBuilder: (_, __) => const SizedBox(width: 8),
         itemBuilder: (context, index) {
           return Stack(
             children: [
               ClipRRect(
                 borderRadius: BorderRadius.circular(8),
-                child: InkWell(
-                  onTap: () =>
-                      _showLocalImagePreview(_photos[index], 'Foto ${index + 1}'),
-                  child: Image.file(
-                    _photos[index],
-                    width: 112,
-                    height: 112,
-                    fit: BoxFit.contain,
+                child: Container(
+                  width: 112,
+                  height: 112,
+                  color: const Color(0xFFFFF8DE),
+                  child: const Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(Icons.picture_as_pdf, color: Colors.red, size: 36),
+                      Text('PDF siap'),
+                    ],
                   ),
                 ),
               ),
@@ -457,7 +572,7 @@ class _DokumentasiPembuanganScreenState
                 top: 4,
                 right: 4,
                 child: InkWell(
-                  onTap: () => _removePhoto(index),
+                  onTap: () => _removeScanPdf(index),
                   child: Container(
                     padding: const EdgeInsets.all(4),
                     decoration: const BoxDecoration(
@@ -476,6 +591,100 @@ class _DokumentasiPembuanganScreenState
     );
   }
 
+  Widget _buildPhotoPicker() {
+    if (_photos.isEmpty) {
+      return Container(
+        width: double.infinity,
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: const Color(0xFFF5F8EE),
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: const Text('Foto wajib. PDF hasil scan bersifat opsional.'),
+      );
+    }
+    return SizedBox(
+      height: 100,
+      child: ListView.separated(
+        scrollDirection: Axis.horizontal,
+        itemCount: _photos.length,
+        separatorBuilder: (_, __) => const SizedBox(width: 8),
+        itemBuilder: (context, index) => Stack(
+          children: [
+            ClipRRect(
+              borderRadius: BorderRadius.circular(8),
+              child: InkWell(
+                onTap: () => _showLocalImagePreview(
+                    _photos[index], 'Foto ${index + 1}'),
+                child: Image.file(_photos[index],
+                    width: 100, height: 100, fit: BoxFit.cover),
+              ),
+            ),
+            Positioned(
+              top: 3,
+              right: 3,
+              child: InkWell(
+                onTap: () => setState(() => _photos.removeAt(index)),
+                child: const CircleAvatar(
+                  radius: 12,
+                  backgroundColor: Colors.black54,
+                  child: Icon(Icons.close, size: 15, color: Colors.white),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildDateFilter() {
+    final filterText = _filterDate == null
+        ? 'Semua tanggal'
+        : _formatDate(_filterDate!.toIso8601String());
+    return Row(
+      children: [
+        Expanded(
+          child: OutlinedButton.icon(
+            onPressed: _pickFilterDate,
+            icon: const Icon(Icons.calendar_month_outlined),
+            label: Text(filterText, overflow: TextOverflow.ellipsis),
+          ),
+        ),
+        if (_filterDate != null)
+          IconButton(
+            onPressed: _clearFilterDate,
+            tooltip: 'Hapus filter tanggal',
+            icon: const Icon(Icons.filter_alt_off_outlined),
+          ),
+        const SizedBox(width: 8),
+        Text('$_totalItems data', style: const TextStyle(fontSize: 12)),
+      ],
+    );
+  }
+
+  Widget _buildPagination() {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 12),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          IconButton(
+            onPressed: _currentPage > 1 ? () => _changePage(_currentPage - 1) : null,
+            icon: const Icon(Icons.chevron_left),
+          ),
+          Text('Halaman $_currentPage dari $_totalPages'),
+          IconButton(
+            onPressed: _currentPage < _totalPages
+                ? () => _changePage(_currentPage + 1)
+                : null,
+            icon: const Icon(Icons.chevron_right),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildList() {
     if (_isLoading) {
       return const Padding(
@@ -485,13 +694,20 @@ class _DokumentasiPembuanganScreenState
     }
 
     if (_items.isEmpty) {
-      return const Padding(
-        padding: EdgeInsets.symmetric(vertical: 32),
-        child: Center(child: Text('Belum ada dokumentasi pembuangan.')),
+      return Column(
+        children: [
+          const Padding(
+            padding: EdgeInsets.symmetric(vertical: 32),
+            child: Center(child: Text('Belum ada dokumentasi pembuangan.')),
+          ),
+          _buildPagination(),
+        ],
       );
     }
 
-    return Column(children: _items.map(_buildItem).toList());
+    return Column(
+      children: [..._items.map(_buildItem), _buildPagination()],
+    );
   }
 
   Widget _buildItem(Map<String, dynamic> item) {
@@ -500,6 +716,8 @@ class _DokumentasiPembuanganScreenState
     final uploadedBy = item['uploadedBy']?.toString() ?? '-';
     final journal = item['journal']?.toString().trim() ?? '';
     final photos = List<String>.from(item['photos'] ?? []);
+    final pdfs = List<String>.from(item['scannedPdfs'] ??
+        (item['scannedPdf'] == null ? [] : [item['scannedPdf']]));
 
     return Card(
       margin: const EdgeInsets.only(bottom: 10),
@@ -529,9 +747,18 @@ class _DokumentasiPembuanganScreenState
               ),
             ],
             const SizedBox(height: 10),
-            if (photos.isEmpty)
-              const Text('Tidak ada foto',
+            if (photos.isEmpty && pdfs.isEmpty)
+              const Text('Tidak ada foto atau PDF',
                   style: TextStyle(color: Colors.black54))
+            else if (photos.isEmpty)
+              Row(
+                children: [
+                  const Icon(Icons.picture_as_pdf_outlined,
+                      color: Color(0xFFC62828)),
+                  const SizedBox(width: 8),
+                  Text('${pdfs.length} PDF tersimpan di folder PDF'),
+                ],
+              )
             else
               SizedBox(
                 height: 96,
@@ -561,6 +788,17 @@ class _DokumentasiPembuanganScreenState
                   },
                 ),
               ),
+            if (photos.isNotEmpty && pdfs.isNotEmpty) ...[
+              const SizedBox(height: 6),
+              Row(
+                children: [
+                  const Icon(Icons.picture_as_pdf_outlined,
+                      color: Color(0xFFC62828), size: 18),
+                  const SizedBox(width: 6),
+                  Text('${pdfs.length} PDF opsional tersimpan'),
+                ],
+              ),
+            ],
             const SizedBox(height: 10),
             Row(
               children: [
@@ -682,6 +920,8 @@ class _DokumentasiPembuanganScreenState
 
   Future<void> _showDisposalDetail(Map<String, dynamic> item) async {
     final photos = List<String>.from(item['photos'] ?? []);
+    final pdfs = List<String>.from(item['scannedPdfs'] ??
+        (item['scannedPdf'] == null ? [] : [item['scannedPdf']]));
     final journal = item['journal']?.toString().trim() ?? '';
 
     await showDialog<void>(
@@ -702,9 +942,13 @@ class _DokumentasiPembuanganScreenState
                 _detailRow('Tanggal', _formatDate(item['date']?.toString())),
                 _detailRow('Upload', item['uploadedBy']?.toString() ?? '-'),
                 if (journal.isNotEmpty) _detailRow('Jurnal', journal),
+                if (pdfs.isNotEmpty)
+                  _detailRow('PDF Foto', '${pdfs.length} file tersimpan'),
                 const SizedBox(height: 12),
                 if (photos.isEmpty)
-                  const Text('Tidak ada foto dokumentasi.')
+                  Text(pdfs.isEmpty
+                      ? 'Tidak ada foto dokumentasi.'
+                      : 'Foto dokumentasi sudah digabungkan menjadi PDF.')
                 else
                   SizedBox(
                     height: 120,
@@ -786,6 +1030,7 @@ class _DokumentasiPembuanganScreenState
     final journalController =
         TextEditingController(text: item['journal']?.toString() ?? '');
     final newPhotos = <File>[];
+    final newPdfs = <File>[];
     var isSaving = false;
 
     try {
@@ -828,8 +1073,7 @@ class _DokumentasiPembuanganScreenState
                             }
                           },
                     child: InputDecorator(
-                      decoration:
-                          const InputDecoration(labelText: 'Tanggal'),
+                      decoration: const InputDecoration(labelText: 'Tanggal'),
                       child: Text(_formatDate(selectedDate.toIso8601String())),
                     ),
                   ),
@@ -863,6 +1107,36 @@ class _DokumentasiPembuanganScreenState
                         ? 'Tambah foto'
                         : '${newPhotos.length} foto baru'),
                   ),
+                  const SizedBox(height: 8),
+                  OutlinedButton.icon(
+                    onPressed: isSaving
+                        ? null
+                        : () async {
+                            try {
+                              final paths =
+                                  await CunningDocumentScanner.getPictures(
+                                scannerSource: ScannerSource.cameraAndGallery,
+                                noOfPages: 25,
+                                asPdf: true,
+                              );
+                              if (paths != null && paths.isNotEmpty) {
+                                setDialogState(() => newPdfs.addAll(
+                                    paths.map((path) => File(path))));
+                              }
+                            } catch (error) {
+                              if (mounted) {
+                                await showAppPopup(context,
+                                    title: 'Scan Gagal',
+                                    message: error.toString(),
+                                    success: false);
+                              }
+                            }
+                          },
+                    icon: const Icon(Icons.document_scanner_outlined),
+                    label: Text(newPdfs.isEmpty
+                        ? 'Tambah PDF scan (opsional)'
+                        : '${newPdfs.length} PDF baru'),
+                  ),
                 ],
               ),
             ),
@@ -883,6 +1157,7 @@ class _DokumentasiPembuanganScreenState
                             date: selectedDate,
                             journal: journalController.text,
                             photos: newPhotos,
+                            scannedPdfs: newPdfs,
                           );
                           if (context.mounted) {
                             Navigator.of(context).pop(result);
@@ -923,6 +1198,8 @@ class _DokumentasiPembuanganScreenState
         _message = 'Data pembuangan berhasil diperbarui';
       });
       await _saveItemsCache();
+      await _loadItems();
+      await CunningDocumentScanner.cleanCache();
       if (mounted) {
         await showAppPopup(context,
             title: 'Berhasil',
@@ -940,6 +1217,7 @@ class _DokumentasiPembuanganScreenState
     required DateTime date,
     required String journal,
     required List<File> photos,
+    required List<File> scannedPdfs,
   }) async {
     final token = await AuthService.getToken();
     if (token == null || token.isEmpty) {
@@ -958,6 +1236,11 @@ class _DokumentasiPembuanganScreenState
       for (final photo in photos) {
         request.files.add(
           await http.MultipartFile.fromPath('photos', photo.path),
+        );
+      }
+      for (final pdf in scannedPdfs) {
+        request.files.add(
+          await http.MultipartFile.fromPath('scannedPdfs', pdf.path),
         );
       }
       return request.send();
@@ -1031,6 +1314,7 @@ class _DokumentasiPembuanganScreenState
         _message = 'Data pembuangan berhasil dihapus';
       });
       await _saveItemsCache();
+      await _loadItems();
       if (mounted) {
         await showAppPopup(context,
             title: 'Berhasil',
@@ -1040,9 +1324,7 @@ class _DokumentasiPembuanganScreenState
     } catch (error) {
       if (mounted) {
         await showAppPopup(context,
-            title: 'Hapus Gagal',
-            message: error.toString(),
-            success: false);
+            title: 'Hapus Gagal', message: error.toString(), success: false);
       }
     }
   }

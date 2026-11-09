@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
@@ -51,16 +52,19 @@ class _LoginScreenState extends State<LoginScreen> {
 
     try {
       final uri = Uri.parse('${AuthService.backendUrl}/api/auth/login');
-      final response = await http.post(
-        uri,
-        headers: await AuthService.deviceHeaders(
-          extra: {'Content-Type': 'application/json'},
-        ),
-        body: jsonEncode({
-          'username': _emailController.text.trim(),
-          'password': _passwordController.text,
-        }),
-      );
+      final response = await http
+          .post(
+            uri,
+            headers: await AuthService.deviceHeaders(
+              extra: const {'Content-Type': 'application/json'},
+            ),
+            body: jsonEncode({
+              'username': _emailController.text.trim(),
+              'password': _passwordController.text,
+            }),
+          )
+          .timeout(const Duration(seconds: 15));
+      if (!mounted) return;
 
       if (response.statusCode == 200) {
         final body = jsonDecode(response.body);
@@ -69,6 +73,7 @@ class _LoginScreenState extends State<LoginScreen> {
         if (token != null && user != null && mounted) {
           await AuthService.saveToken(token);
           await AuthService.saveUser(user);
+          if (!mounted) return;
           Navigator.of(context).pushReplacement(
             MaterialPageRoute(builder: (_) => const HomeScreen()),
           );
@@ -76,10 +81,37 @@ class _LoginScreenState extends State<LoginScreen> {
         }
       }
 
-      final decoded = response.body.isNotEmpty ? jsonDecode(response.body) : null;
-      final message = decoded is Map<String, dynamic> ? decoded['message'] as String? : null;
-      setState(() => _errorMessage = message ?? 'Login gagal: ${response.statusCode}');
+      dynamic decoded;
+      if (response.body.isNotEmpty) {
+        try {
+          decoded = jsonDecode(response.body);
+        } on FormatException {
+          setState(() {
+            _errorMessage = response.statusCode == 404
+                ? 'Server tidak menemukan endpoint login (404). Alamat server '
+                    'yang dipakai: ${AuthService.backendUrl}. Periksa koneksi '
+                    'server di Pengaturan Akun.'
+                : response.statusCode == 403
+                    ? 'Akses ke server ditolak (403). Dev Tunnel mungkin '
+                        'diblokir oleh firewall atau filter jaringan. Periksa '
+                        'izin tunnel atau coba jaringan lain: $uri'
+                : 'Respons server tidak valid (HTTP ${response.statusCode}).';
+          });
+          return;
+        }
+      }
+      final message = decoded is Map<String, dynamic>
+          ? decoded['message'] as String?
+          : null;
+      setState(() =>
+          _errorMessage = message ?? 'Login gagal: ${response.statusCode}');
+    } on TimeoutException {
+      if (!mounted) return;
+      setState(() => _errorMessage =
+          'Koneksi ke server terlalu lama (lebih dari 15 detik). Periksa '
+          'internet dan alamat server di Pengaturan Akun.');
     } catch (error) {
+      if (!mounted) return;
       setState(() => _errorMessage = 'Login gagal: $error');
     } finally {
       if (mounted) {
@@ -151,10 +183,11 @@ class _LoginScreenState extends State<LoginScreen> {
                     const SizedBox(height: 18),
                     Text(
                       'Papaya Fresh Gallery',
-                      style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                            color: const Color(0xFF1D2B38),
-                            fontWeight: FontWeight.w900,
-                          ),
+                      style:
+                          Theme.of(context).textTheme.headlineSmall?.copyWith(
+                                color: const Color(0xFF1D2B38),
+                                fontWeight: FontWeight.w900,
+                              ),
                       textAlign: TextAlign.center,
                     ),
                     const SizedBox(height: 8),
@@ -187,8 +220,8 @@ class _LoginScreenState extends State<LoginScreen> {
                                 icon: Icon(_obscurePassword
                                     ? Icons.visibility_outlined
                                     : Icons.visibility_off_outlined),
-                                onPressed: () => setState(() =>
-                                    _obscurePassword = !_obscurePassword),
+                                onPressed: () => setState(
+                                    () => _obscurePassword = !_obscurePassword),
                               ),
                             ),
                             validator: (value) => value == null || value.isEmpty
@@ -230,8 +263,8 @@ class _LoginScreenState extends State<LoginScreen> {
                                 borderRadius: BorderRadius.circular(16),
                               ),
                               child: Text(_errorMessage!,
-                                  style:
-                                      const TextStyle(color: Color(0xFFC62828))),
+                                  style: const TextStyle(
+                                      color: Color(0xFFC62828))),
                             ),
                           ],
                         ],
