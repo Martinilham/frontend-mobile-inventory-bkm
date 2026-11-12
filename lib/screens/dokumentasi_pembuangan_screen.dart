@@ -30,6 +30,7 @@ class _DokumentasiPembuanganScreenState
   final _imagePicker = ImagePicker();
   final _journalController = TextEditingController();
   String _selectedDivision = 'GROCERY';
+  String _documentationType = 'disposal';
   DateTime _selectedDate = DateTime.now();
   DateTime? _filterDate;
   static const _pageSize = 10;
@@ -187,15 +188,15 @@ class _DokumentasiPembuanganScreenState
       late final List<File> files;
       if (fromCamera) {
         final picked = await _imagePicker.pickImage(
-              source: ImageSource.camera,
-              maxWidth: 1800,
-              imageQuality: 88,
-            );
+          source: ImageSource.camera,
+          maxWidth: 1800,
+          imageQuality: 88,
+        );
         if (picked == null) return;
         files = [File(picked.path)];
       } else {
-        final picked = await _imagePicker.pickMultiImage(
-            maxWidth: 1800, imageQuality: 88);
+        final picked =
+            await _imagePicker.pickMultiImage(maxWidth: 1800, imageQuality: 88);
         if (picked.isEmpty) return;
         files = picked.map((photo) => File(photo.path)).toList();
       }
@@ -209,8 +210,10 @@ class _DokumentasiPembuanganScreenState
   }
 
   Future<void> _uploadDisposal() async {
-    if (_photos.isEmpty) {
-      setState(() => _message = 'Ambil atau pilih minimal satu foto pembuangan');
+    if (_photos.isEmpty && _scanPdfs.isEmpty) {
+      setState(() => _message = _documentationType == 'receipt'
+          ? 'Ambil foto atau scan dokumen tanda terima'
+          : 'Ambil atau pilih minimal satu foto pembuangan');
       return;
     }
 
@@ -234,6 +237,7 @@ class _DokumentasiPembuanganScreenState
       request.fields['division'] = _selectedDivision;
       request.fields['date'] = _selectedDate.toIso8601String().split('T').first;
       request.fields['journal'] = _journalController.text.trim();
+      request.fields['documentationType'] = _documentationType;
       for (final photo in _photos) {
         request.files.add(
           await http.MultipartFile.fromPath('photos', photo.path),
@@ -264,9 +268,11 @@ class _DokumentasiPembuanganScreenState
         return;
       }
 
+      final documentLabel =
+          _documentationType == 'receipt' ? 'tanda terima' : 'pembuangan';
       final successMessage = _scanPdfs.isEmpty
-          ? 'Foto pembuangan berhasil disimpan'
-          : 'Foto dan PDF hasil scan pembuangan berhasil disimpan';
+          ? 'Dokumentasi $documentLabel berhasil disimpan'
+          : 'Foto dan PDF dokumentasi $documentLabel berhasil disimpan';
       final uploaded = body['disposal'];
       setState(() {
         if (uploaded is Map<String, dynamic>) {
@@ -280,6 +286,7 @@ class _DokumentasiPembuanganScreenState
         _photos = [];
         _journalController.clear();
         _selectedDivision = 'GROCERY';
+        _documentationType = 'disposal';
         _selectedDate = DateTime.now();
       });
       await _saveItemsCache();
@@ -309,7 +316,8 @@ class _DokumentasiPembuanganScreenState
 
   Future<void> _saveItemsCache([String? cacheKey]) async {
     final dateKey = _filterDate?.toIso8601String().split('T').first ?? 'all';
-    await AuthService.saveJsonCache(cacheKey ?? 'mobile_disposals_${dateKey}_$_currentPage', {
+    await AuthService.saveJsonCache(
+        cacheKey ?? 'mobile_disposals_${dateKey}_$_currentPage', {
       'disposals': _items,
       'totalPages': _totalPages,
       'total': _totalItems,
@@ -416,8 +424,19 @@ class _DokumentasiPembuanganScreenState
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           const Text(
-            'Tambah Dokumentasi Pembuangan',
+            'Tambah Dokumentasi',
             style: TextStyle(fontWeight: FontWeight.w800, fontSize: 16),
+          ),
+          const SizedBox(height: 12),
+          DropdownButtonFormField<String>(
+            initialValue: _documentationType,
+            decoration: const InputDecoration(labelText: 'Jenis dokumentasi'),
+            items: const [
+              DropdownMenuItem(value: 'disposal', child: Text('Pembuangan')),
+              DropdownMenuItem(value: 'receipt', child: Text('Tanda Terima')),
+            ],
+            onChanged: (value) =>
+                setState(() => _documentationType = value ?? 'disposal'),
           ),
           const SizedBox(height: 12),
           DropdownButtonFormField<String>(
@@ -502,9 +521,8 @@ class _DokumentasiPembuanganScreenState
           ElevatedButton.icon(
             onPressed: _isUploading ? null : _uploadDisposal,
             icon: const Icon(Icons.cloud_upload_outlined, size: 18),
-            label: Text(_isUploading
-                ? 'Menyimpan data...'
-                : 'Simpan Pembuangan'),
+            label:
+                Text(_isUploading ? 'Menyimpan data...' : 'Simpan Pembuangan'),
           ),
         ],
       ),
@@ -614,8 +632,8 @@ class _DokumentasiPembuanganScreenState
             ClipRRect(
               borderRadius: BorderRadius.circular(8),
               child: InkWell(
-                onTap: () => _showLocalImagePreview(
-                    _photos[index], 'Foto ${index + 1}'),
+                onTap: () =>
+                    _showLocalImagePreview(_photos[index], 'Foto ${index + 1}'),
                 child: Image.file(_photos[index],
                     width: 100, height: 100, fit: BoxFit.cover),
               ),
@@ -670,7 +688,8 @@ class _DokumentasiPembuanganScreenState
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
           IconButton(
-            onPressed: _currentPage > 1 ? () => _changePage(_currentPage - 1) : null,
+            onPressed:
+                _currentPage > 1 ? () => _changePage(_currentPage - 1) : null,
             icon: const Icon(Icons.chevron_left),
           ),
           Text('Halaman $_currentPage dari $_totalPages'),
@@ -715,6 +734,9 @@ class _DokumentasiPembuanganScreenState
     final dateText = _formatDate(item['date']?.toString());
     final uploadedBy = item['uploadedBy']?.toString() ?? '-';
     final journal = item['journal']?.toString().trim() ?? '';
+    final documentationType = item['documentationType']?.toString() == 'receipt'
+        ? 'Dokumentasi Tanda Terima'
+        : 'Dokumentasi Pembuangan';
     final photos = List<String>.from(item['photos'] ?? []);
     final pdfs = List<String>.from(item['scannedPdfs'] ??
         (item['scannedPdf'] == null ? [] : [item['scannedPdf']]));
@@ -729,7 +751,7 @@ class _DokumentasiPembuanganScreenState
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              _divisionLabel(division),
+              '$documentationType - ${_divisionLabel(division)}',
               style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 15),
             ),
             const SizedBox(height: 4),
@@ -936,6 +958,12 @@ class _DokumentasiPembuanganScreenState
               mainAxisSize: MainAxisSize.min,
               children: [
                 _detailRow(
+                  'Jenis dokumentasi',
+                  item['documentationType']?.toString() == 'receipt'
+                      ? 'Tanda Terima'
+                      : 'Pembuangan',
+                ),
+                _detailRow(
                   'Divisi',
                   _divisionLabel(item['division']?.toString() ?? '-'),
                 ),
@@ -1027,6 +1055,10 @@ class _DokumentasiPembuanganScreenState
     }
     var selectedDate =
         DateTime.tryParse(item['date']?.toString() ?? '') ?? DateTime.now();
+    var selectedDocumentationType =
+        item['documentationType']?.toString() == 'receipt'
+            ? 'receipt'
+            : 'disposal';
     final journalController =
         TextEditingController(text: item['journal']?.toString() ?? '');
     final newPhotos = <File>[];
@@ -1043,6 +1075,22 @@ class _DokumentasiPembuanganScreenState
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
+                  DropdownButtonFormField<String>(
+                    initialValue: selectedDocumentationType,
+                    items: const [
+                      DropdownMenuItem(
+                          value: 'disposal', child: Text('Pembuangan')),
+                      DropdownMenuItem(
+                          value: 'receipt', child: Text('Tanda Terima')),
+                    ],
+                    onChanged: isSaving
+                        ? null
+                        : (value) => setDialogState(() =>
+                            selectedDocumentationType = value ?? 'disposal'),
+                    decoration:
+                        const InputDecoration(labelText: 'Jenis dokumentasi'),
+                  ),
+                  const SizedBox(height: 10),
                   DropdownButtonFormField<String>(
                     initialValue: selectedDivision,
                     items: _divisions
@@ -1120,8 +1168,8 @@ class _DokumentasiPembuanganScreenState
                                 asPdf: true,
                               );
                               if (paths != null && paths.isNotEmpty) {
-                                setDialogState(() => newPdfs.addAll(
-                                    paths.map((path) => File(path))));
+                                setDialogState(() => newPdfs
+                                    .addAll(paths.map((path) => File(path))));
                               }
                             } catch (error) {
                               if (mounted) {
@@ -1156,6 +1204,7 @@ class _DokumentasiPembuanganScreenState
                             division: selectedDivision,
                             date: selectedDate,
                             journal: journalController.text,
+                            documentationType: selectedDocumentationType,
                             photos: newPhotos,
                             scannedPdfs: newPdfs,
                           );
@@ -1216,6 +1265,7 @@ class _DokumentasiPembuanganScreenState
     required String division,
     required DateTime date,
     required String journal,
+    required String documentationType,
     required List<File> photos,
     required List<File> scannedPdfs,
   }) async {
@@ -1233,6 +1283,7 @@ class _DokumentasiPembuanganScreenState
       request.fields['division'] = division;
       request.fields['date'] = date.toIso8601String().split('T').first;
       request.fields['journal'] = journal.trim();
+      request.fields['documentationType'] = documentationType;
       for (final photo in photos) {
         request.files.add(
           await http.MultipartFile.fromPath('photos', photo.path),
